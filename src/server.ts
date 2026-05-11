@@ -5,6 +5,11 @@ import { createRouter } from './router';
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
+app.use((_req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  next();
+});
+
 const graph = loadGraph();
 app.use('/api', createRouter(graph));
 

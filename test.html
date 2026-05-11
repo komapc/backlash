@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Graph Query — Backslash</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── header ── */
+    header {
+      padding: 10px 20px;
+      background: #1a1d27;
+      border-bottom: 1px solid #2d3148;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 14px; font-weight: 700; color: #a78bfa; white-space: nowrap; }
+
+    .section-label {
+      font-size: 11px;
+      color: #475569;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      white-space: nowrap;
+    }
+
+    .filter-chip {
+      display: flex; align-items: center; gap: 6px;
+      background: #252840; border: 1px solid #3d4166;
+      border-radius: 20px; padding: 4px 12px;
+      cursor: pointer; font-size: 12px; user-select: none;
+      transition: background .15s, border-color .15s;
+    }
+    .filter-chip input { display: none; }
+    .filter-chip.active { background: #312e81; border-color: #6366f1; }
+    .filter-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }
+    .filter-chip.active .dot { background: #818cf8; }
+
+    select {
+      background: #252840; border: 1px solid #3d4166; color: #e2e8f0;
+      border-radius: 6px; padding: 4px 8px; font-size: 12px;
+      cursor: pointer; max-width: 160px;
+    }
+
+    #query-btn {
+      background: #6366f1; color: #fff; border: none;
+      border-radius: 6px; padding: 6px 18px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    #query-btn:hover { background: #4f46e5; }
+
+    #stats { font-size: 12px; color: #64748b; margin-left: auto; white-space: nowrap; }
+
+    /* ── main area ── */
+    main { display: flex; flex: 1; overflow: hidden; }
+
+    #canvas-wrap { flex: 1; position: relative; overflow: hidden; }
+    canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+    canvas:active { cursor: grabbing; }
+
+    #empty-msg {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%,-50%);
+      color: #475569; font-size: 14px; text-align: center;
+      pointer-events: none; line-height: 2;
+    }
+
+    #error-banner {
+      display: none;
+      position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+      background: #7f1d1d; border: 1px solid #ef4444; color: #fca5a5;
+      border-radius: 8px; padding: 10px 20px; font-size: 13px; font-weight: 500;
+      pointer-events: none; z-index: 10; white-space: nowrap;
+    }
+
+    .filter-chip .hint {
+      font-size: 10px; color: #64748b; margin-left: 2px;
+    }
+    .filter-chip.active .hint { color: #818cf8; }
+
+    /* ── sidebar ── */
+    #sidebar {
+      width: 260px; background: #1a1d27;
+      border-left: 1px solid #2d3148;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    #sidebar h2 {
+      padding: 10px 14px; font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 1px;
+      color: #64748b; border-bottom: 1px solid #2d3148; flex-shrink: 0;
+    }
+    #json-out {
+      flex: 1; overflow-y: auto; padding: 10px 14px;
+      font-family: monospace; font-size: 11px; line-height: 1.6;
+      color: #94a3b8; white-space: pre;
+    }
+    #legend {
+      padding: 10px 14px; border-top: 1px solid #2d3148;
+      display: flex; flex-direction: column; gap: 5px; flex-shrink: 0;
+    }
+    .legend-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #94a3b8; }
+    .legend-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
+
+    /* ── tooltip ── */
+    #tooltip {
+      position: fixed; background: #1e2235; border: 1px solid #3d4166;
+      border-radius: 8px; padding: 10px 14px; font-size: 12px; line-height: 1.7;
+      pointer-events: none; display: none; z-index: 99; max-width: 240px;
+    }
+    #tooltip strong { color: #a78bfa; display: block; }
+    .tag {
+      display: inline-block; border-radius: 4px; padding: 1px 6px;
+      font-size: 10px; margin-right: 3px;
+    }
+    .tag-kind    { background: #1e293b; color: #94a3b8; }
+    .tag-public  { background: #365314; color: #bef264; }
+    .tag-sink    { background: #164e63; color: #67e8f9; }
+    .tag-vuln    { background: #7f1d1d; color: #fca5a5; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Backslash — Graph Query</h1>
+
+  <span class="section-label">Filters</span>
+  <label class="filter-chip" id="chip-public" title="Keep only routes whose first node is publicly exposed (publicExposed: true). Entry points are: frontend, gateway-service.">
+    <input type="checkbox" value="startsPublic" />
+    <span class="dot"></span> Starts Public <span class="hint">?</span>
+  </label>
+  <label class="filter-chip" id="chip-sink" title="Keep only routes that end at a data sink — an RDS database or SQS queue. Sinks in this graph: prod-postgresdb, prod-sqs.">
+    <input type="checkbox" value="endsAtSink" />
+    <span class="dot"></span> Ends at Sink <span class="hint">?</span>
+  </label>
+  <label class="filter-chip" id="chip-vuln" title="Keep only routes that pass through at least one service with a known vulnerability (e.g. SQL injection, path traversal). Vulnerable nodes: auth-service, order-service.">
+    <input type="checkbox" value="hasVulnerability" />
+    <span class="dot"></span> Has Vulnerability <span class="hint">?</span>
+  </label>
+
+  <span class="section-label" style="margin-left:8px">Highlight path</span>
+  <select id="from-node"><option value="">From node…</option></select>
+  <select id="to-node"><option value="">To node…</option></select>
+
+  <button id="query-btn">Query</button>
+  <span id="stats">—</span>
+</header>
+
+<main>
+  <div id="canvas-wrap">
+    <canvas id="c"></canvas>
+    <div id="empty-msg">Click <strong>Query</strong> to load the graph.<br>Use filters to narrow results, or pick From/To nodes to highlight a path.</div>
+    <div id="error-banner">⚠ Could not reach the server — is it running on localhost:3000?</div>
+  </div>
+
+  <div id="sidebar">
+    <h2>Response JSON</h2>
+    <pre id="json-out">—</pre>
+    <div id="legend">
+      <div class="legend-row"><div class="legend-dot" style="background:#bef264"></div> Public entry point</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#67e8f9"></div> Sink (RDS / SQS)</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#f87171"></div> Has vulnerability</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#818cf8"></div> Internal service</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#475569"></div> Unknown / ghost</div>
+    </div>
+  </div>
+</main>
+
+<div id="tooltip"></div>
+
+<script>
+const API = 'http://localhost:3000/api/routes';
+const NODE_R = 20;
+const LABEL_FONT = '11px system-ui';
+
+let nodes = [], edgeList = [], highlightSet = new Set();
+let pan = { x: 0, y: 0 }, scale = 1;
+let dragging = false, dragStart, panStart, hoveredNode = null;
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// ── filter chips ───────────────────────────────────────────────────
+document.querySelectorAll('.filter-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const cb = chip.querySelector('input');
+    cb.checked = !cb.checked;
+    chip.classList.toggle('active', cb.checked);
+  });
+});
+
+document.getElementById('query-btn').addEventListener('click', fetchGraph);
+
+// ── from/to highlight ──────────────────────────────────────────────
+document.getElementById('from-node').addEventListener('change', updateHighlight);
+document.getElementById('to-node').addEventListener('change', updateHighlight);
+
+function updateHighlight() {
+  const from = document.getElementById('from-node').value;
+  const to   = document.getElementById('to-node').value;
+  highlightSet.clear();
+  if (from && to && from !== to) {
+    const path = bfs(from, to);
+    path.forEach(n => highlightSet.add(n));
+  }
+  draw();
+}
+
+function bfs(fromName, toName) {
+  const adj = new Map();
+  nodes.forEach(n => adj.set(n.name, []));
+  edgeList.forEach(e => adj.get(e.from)?.push(e.to));
+
+  const prev = new Map();
+  const queue = [fromName];
+  prev.set(fromName, null);
+
+  while (queue.length) {
+    const cur = queue.shift();
+    if (cur === toName) break;
+    for (const nb of (adj.get(cur) || [])) {
+      if (!prev.has(nb)) { prev.set(nb, cur); queue.push(nb); }
+    }
+  }
+
+  if (!prev.has(toName)) return [];
+  const path = [];
+  let cur = toName;
+  while (cur !== null) { path.unshift(cur); cur = prev.get(cur); }
+  return path;
+}
+
+// ── fetch & render ─────────────────────────────────────────────────
+async function fetchGraph() {
+  const selected = [...document.querySelectorAll('.filter-chip input:checked')].map(i => i.value);
+  const url = selected.length ? `${API}?filters=${selected.join(',')}` : API;
+
+  const errBanner  = document.getElementById('error-banner');
+  const emptyMsg   = document.getElementById('empty-msg');
+  errBanner.style.display = 'none';
+
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    document.getElementById('json-out').textContent = JSON.stringify(data, null, 2);
+
+    if (!data.nodes) return;
+
+    const isEmpty = data.nodes.length === 0;
+    document.getElementById('stats').textContent = isEmpty
+      ? 'No matching routes'
+      : `${data.nodes.length} nodes · ${data.edges.length} edges`;
+
+    emptyMsg.style.display = isEmpty ? 'block' : 'none';
+    if (isEmpty) {
+      emptyMsg.innerHTML = '🔍 No routes match the selected filters.<br><span style="font-size:12px">Try removing a filter or changing the combination.</span>';
+    }
+
+    // Populate From/To dropdowns
+    const fromSel = document.getElementById('from-node');
+    const toSel   = document.getElementById('to-node');
+    const prev = { from: fromSel.value, to: toSel.value };
+    fromSel.innerHTML = '<option value="">From node…</option>';
+    toSel.innerHTML   = '<option value="">To node…</option>';
+    data.nodes.slice().sort((a,b) => a.name.localeCompare(b.name)).forEach(n => {
+      fromSel.innerHTML += `<option value="${n.name}"${n.name===prev.from?' selected':''}>${n.name}</option>`;
+      toSel.innerHTML   += `<option value="${n.name}"${n.name===prev.to?' selected':''}>${n.name}</option>`;
+    });
+
+    if (!isEmpty) renderGraph(data);
+  } catch (e) {
+    document.getElementById('json-out').textContent = 'Error: ' + e.message;
+    document.getElementById('stats').textContent = 'Connection error';
+    errBanner.style.display = 'block';
+  }
+}
+
+// ── layout ─────────────────────────────────────────────────────────
+function computeLayers(rawNodes, rawEdges) {
+  const inDeg = new Map(rawNodes.map(n => [n.name, 0]));
+  const adj   = new Map(rawNodes.map(n => [n.name, []]));
+  rawEdges.forEach(e => {
+    adj.get(e.from)?.push(e.to);
+    inDeg.set(e.to, (inDeg.get(e.to) || 0) + 1);
+  });
+
+  // Longest-path layering via iterative relaxation
+  const layer = new Map(rawNodes.map(n => [n.name, 0]));
+  const order = topSort(rawNodes, rawEdges, adj, inDeg);
+  for (const name of order) {
+    for (const nb of (adj.get(name) || [])) {
+      if (layer.get(nb) <= layer.get(name)) {
+        layer.set(nb, layer.get(name) + 1);
+      }
+    }
+  }
+  return layer;
+}
+
+function topSort(rawNodes, rawEdges, adj, inDeg) {
+  const deg = new Map(inDeg);
+  const queue = rawNodes.filter(n => deg.get(n.name) === 0).map(n => n.name);
+  const result = [];
+  while (queue.length) {
+    const cur = queue.shift();
+    result.push(cur);
+    for (const nb of (adj.get(cur) || [])) {
+      deg.set(nb, deg.get(nb) - 1);
+      if (deg.get(nb) === 0) queue.push(nb);
+    }
+  }
+  // append any remaining (cycles/disconnected)
+  rawNodes.forEach(n => { if (!result.includes(n.name)) result.push(n.name); });
+  return result;
+}
+
+function renderGraph(data) {
+  resizeCanvas();
+
+  const W = canvas.width, H = canvas.height;
+  const PAD = 50;
+
+  const layerMap = computeLayers(data.nodes, data.edges);
+  const maxLayer = Math.max(0, ...layerMap.values());
+
+  // Group by layer
+  const groups = new Map();
+  data.nodes.forEach(n => {
+    const l = layerMap.get(n.name) ?? 0;
+    if (!groups.has(l)) groups.set(l, []);
+    groups.get(l).push(n.name);
+  });
+
+  // Node radius: shrink so the busiest layer always fits
+  const maxPerLayer = Math.max(...[...groups.values()].map(v => v.length));
+  const r = Math.max(8, Math.min(NODE_R, Math.floor((W - PAD * 2) / (maxPerLayer * 2.5))));
+  const minGap = r * 2 + 10;
+
+  // Virtual canvas: wide enough so no layer ever overlaps
+  const virtualW = Math.max(W, maxPerLayer * minGap + PAD * 2);
+  const layerCount = maxLayer + 1;
+  const yStep = Math.min(100, (H - PAD * 2) / Math.max(layerCount - 1, 1));
+
+  const posMap = new Map();
+  groups.forEach((names, l) => {
+    const rowW = names.length * minGap;
+    const startX = (virtualW - rowW) / 2 + minGap / 2;
+    names.forEach((name, i) => {
+      posMap.set(name, { x: startX + i * minGap, y: PAD + l * yStep });
+    });
+  });
+
+  nodes = data.nodes.map(n => ({
+    ...n,
+    x: posMap.get(n.name)?.x ?? virtualW / 2,
+    y: posMap.get(n.name)?.y ?? H / 2,
+    vx: 0, vy: 0, r,
+  }));
+
+  const nodeIdx = new Map(nodes.map((n, i) => [n.name, i]));
+  edgeList = (data.edges || [])
+    .map(e => ({ from: e.from, to: e.to, fi: nodeIdx.get(e.from), ti: nodeIdx.get(e.to) }))
+    .filter(e => e.fi !== undefined && e.ti !== undefined);
+
+  // X-only force pass: same-layer repulsion + edge attraction
+  for (let iter = 0; iter < 400; iter++) {
+    const alpha = 1 - iter / 400;
+    nodes.forEach((a, i) => {
+      nodes.forEach((b, j) => {
+        if (j <= i) return;
+        if ((layerMap.get(a.name) ?? 0) !== (layerMap.get(b.name) ?? 0)) return;
+        const dx = b.x - a.x || 0.1;
+        const dist = Math.abs(dx);
+        if (dist < minGap * 1.5) {
+          const force = (minGap * 1.5 - dist) * 0.3 * Math.sign(dx);
+          a.vx -= force; b.vx += force;
+        }
+      });
+    });
+    edgeList.forEach(e => {
+      const a = nodes[e.fi], b = nodes[e.ti];
+      const dx = b.x - a.x;
+      a.vx += dx * 0.008; b.vx -= dx * 0.008;
+    });
+    nodes.forEach(n => { n.vx *= 0.5; n.x += n.vx * alpha; });
+  }
+
+  // Fit to canvas: scale + center
+  const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
+  const minX = Math.min(...xs) - r, maxX = Math.max(...xs) + r;
+  const minY = Math.min(...ys) - r, maxY = Math.max(...ys) + r;
+  const fitScale = Math.min(
+    (W - PAD * 2) / (maxX - minX || 1),
+    (H - PAD * 2) / (maxY - minY || 1),
+    1
+  );
+  const offsetX = (W - (maxX - minX) * fitScale) / 2 - minX * fitScale;
+  const offsetY = PAD - minY * fitScale;
+  nodes.forEach(n => { n.x = n.x * fitScale + offsetX; n.y = n.y * fitScale + offsetY; });
+
+  pan = { x: 0, y: 0 }; scale = 1; highlightSet.clear();
+  updateHighlight();
+  draw();
+}
+
+// ── drawing ────────────────────────────────────────────────────────
+function nodeColor(n) {
+  if (n.publicExposed)  return '#bef264';
+  if (n.kind === 'rds' || n.kind === 'sqs') return '#67e8f9';
+  if ((n.vulnerabilities?.length ?? 0) > 0)  return '#f87171';
+  if (n.kind === 'unknown') return '#475569';
+  return '#818cf8';
+}
+
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(pan.x, pan.y);
+  ctx.scale(scale, scale);
+
+  const hasHL = highlightSet.size > 0;
+
+  // edges
+  edgeList.forEach(e => {
+    const a = nodes[e.fi], b = nodes[e.ti];
+    const onPath = hasHL && highlightSet.has(a.name) && highlightSet.has(b.name);
+    drawArrow(a, b, onPath, hasHL && !onPath);
+  });
+
+  // nodes
+  nodes.forEach(n => {
+    const color = nodeColor(n);
+    const dimmed = hasHL && !highlightSet.has(n.name);
+    const highlighted = hasHL && highlightSet.has(n.name);
+
+    ctx.globalAlpha = dimmed ? 0.25 : 1;
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+    ctx.fillStyle = color + '28';
+    ctx.fill();
+    ctx.strokeStyle = highlighted ? '#fff' : color;
+    ctx.lineWidth = (n === hoveredNode || highlighted) ? 2.5 : 1.5;
+    ctx.stroke();
+
+    // label
+    ctx.fillStyle = dimmed ? '#475569' : '#e2e8f0';
+    const fontSize = Math.max(9, Math.min(11, n.r - 2));
+    ctx.font = highlighted ? `bold ${fontSize}px system-ui` : `${fontSize}px system-ui`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const label = n.name.replace(/-service$/, '');
+    ctx.fillText(label, n.x, n.y + n.r + 4);
+    ctx.globalAlpha = 1;
+  });
+
+  ctx.restore();
+}
+
+function drawArrow(a, b, highlight, dimmed) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const d  = Math.sqrt(dx*dx + dy*dy);
+  if (d < 1) return;
+  const ux = dx/d, uy = dy/d;
+  const sx = a.x + ux * a.r, sy = a.y + uy * a.r;
+  const ex = b.x - ux * (b.r + 6), ey = b.y - uy * (b.r + 6);
+
+  ctx.globalAlpha = dimmed ? 0.1 : highlight ? 1 : 0.55;
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(ex, ey);
+  ctx.strokeStyle = highlight ? '#a78bfa' : '#64748b';
+  ctx.lineWidth   = highlight ? 2.5 : 1.2;
+  ctx.stroke();
+
+  const ang = Math.atan2(uy, ux), sz = highlight ? 9 : 7;
+  ctx.beginPath();
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(ex - sz * Math.cos(ang - 0.4), ey - sz * Math.sin(ang - 0.4));
+  ctx.lineTo(ex - sz * Math.cos(ang + 0.4), ey - sz * Math.sin(ang + 0.4));
+  ctx.closePath();
+  ctx.fillStyle = highlight ? '#a78bfa' : '#64748b';
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+// ── interaction ────────────────────────────────────────────────────
+function hitTest(mx, my) {
+  return nodes.find(n => {
+    const dx = n.x - mx, dy = n.y - my;
+    return Math.sqrt(dx*dx + dy*dy) <= n.r + 5;
+  });
+}
+
+canvas.addEventListener('mousedown', e => {
+  dragging = true;
+  dragStart = { x: e.clientX, y: e.clientY };
+  panStart  = { ...pan };
+});
+window.addEventListener('mouseup', e => {
+  if (dragging && Math.abs(e.clientX - dragStart.x) < 4 && Math.abs(e.clientY - dragStart.y) < 4) {
+    // it was a click, not a drag
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left - pan.x) / scale;
+    const my = (e.clientY - rect.top  - pan.y) / scale;
+    const hit = hitTest(mx, my);
+    if (hit) {
+      const fromSel = document.getElementById('from-node');
+      const toSel   = document.getElementById('to-node');
+      if (!fromSel.value || (fromSel.value && toSel.value)) {
+        fromSel.value = hit.name; toSel.value = '';
+      } else {
+        toSel.value = hit.name;
+      }
+      updateHighlight();
+    }
+  }
+  dragging = false;
+});
+canvas.addEventListener('mousemove', e => {
+  if (dragging) {
+    pan.x = panStart.x + (e.clientX - dragStart.x);
+    pan.y = panStart.y + (e.clientY - dragStart.y);
+    draw(); return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left - pan.x) / scale;
+  const my = (e.clientY - rect.top  - pan.y) / scale;
+  const hit = hitTest(mx, my);
+  if (hit !== hoveredNode) { hoveredNode = hit || null; draw(); }
+
+  const tip = document.getElementById('tooltip');
+  if (hit) {
+    let html = `<strong>${hit.name}</strong>`;
+    html += `<span class="tag tag-kind">${hit.kind}</span>`;
+    if (hit.publicExposed) html += `<span class="tag tag-public">public</span>`;
+    if (hit.kind === 'rds' || hit.kind === 'sqs') html += `<span class="tag tag-sink">${hit.kind.toUpperCase()}</span>`;
+    if (hit.vulnerabilities?.length) {
+      html += `<span class="tag tag-vuln">${hit.vulnerabilities.length} vuln${hit.vulnerabilities.length>1?'s':''}</span>`;
+      html += `<div style="margin-top:6px;font-size:11px;color:#fca5a5">`;
+      hit.vulnerabilities.forEach(v => { html += `• ${v.severity}: ${v.message.slice(0,55)}…<br>`; });
+      html += `</div>`;
+    }
+    html += `<div style="margin-top:4px;font-size:10px;color:#475569">Click to set From/To</div>`;
+    tip.innerHTML = html;
+    tip.style.display = 'block';
+    tip.style.left = (e.clientX + 14) + 'px';
+    tip.style.top  = (e.clientY - 10) + 'px';
+  } else {
+    tip.style.display = 'none';
+  }
+});
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const d = e.deltaY > 0 ? 0.85 : 1.18;
+  pan.x = mx - (mx - pan.x) * d;
+  pan.y = my - (my - pan.y) * d;
+  scale *= d;
+  draw();
+}, { passive: false });
+
+function resizeCanvas() {
+  canvas.width  = canvas.offsetWidth;
+  canvas.height = canvas.offsetHeight;
+}
+window.addEventListener('resize', () => { if (nodes.length) { resizeCanvas(); draw(); } });
+
+fetchGraph();
+</script>
+</body>
+</html>
