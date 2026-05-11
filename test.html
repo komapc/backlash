@@ -36,17 +36,6 @@
       white-space: nowrap;
     }
 
-    .filter-chip {
-      display: flex; align-items: center; gap: 6px;
-      background: #252840; border: 1px solid #3d4166;
-      border-radius: 20px; padding: 4px 12px;
-      cursor: pointer; font-size: 12px; user-select: none;
-      transition: background .15s, border-color .15s;
-    }
-    .filter-chip input { display: none; }
-    .filter-chip.active { background: #312e81; border-color: #6366f1; }
-    .filter-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }
-    .filter-chip.active .dot { background: #818cf8; }
 
     select {
       background: #252840; border: 1px solid #3d4166; color: #e2e8f0;
@@ -85,11 +74,17 @@
       pointer-events: none; z-index: 10; white-space: nowrap;
     }
 
-    .filter-chip .hint {
-      font-size: 10px; color: #64748b; margin-left: 2px;
-    }
-    .filter-chip.active .hint { color: #818cf8; }
     #path-msg { font-size: 11px; color: #ef4444; white-space: nowrap; }
+
+    #api-meta {
+      padding: 8px 14px 6px; border-bottom: 1px solid #2d3148;
+      font-family: monospace; font-size: 11px; line-height: 1.8; flex-shrink: 0;
+    }
+    .api-url    { color: #a78bfa; }
+    .api-ok     { color: #86efac; }
+    .api-err    { color: #f87171; }
+    .api-time   { color: #fbbf24; }
+    .api-label  { color: #475569; }
 
     /* ── sidebar ── */
     #sidebar {
@@ -192,21 +187,7 @@
 <header>
   <h1>Backslash — Graph Query</h1>
 
-  <span class="section-label">Filters</span>
-  <label class="filter-chip" id="chip-public" title="Keep only routes whose first node is publicly exposed (publicExposed: true). Entry points are: frontend, gateway-service.">
-    <input type="checkbox" value="startsPublic" />
-    <span class="dot"></span> Starts Public <span class="hint">?</span>
-  </label>
-  <label class="filter-chip" id="chip-sink" title="Keep only routes that end at a data sink — an RDS database or SQS queue. Sinks in this graph: prod-postgresdb, prod-sqs.">
-    <input type="checkbox" value="endsAtSink" />
-    <span class="dot"></span> Ends at Sink <span class="hint">?</span>
-  </label>
-  <label class="filter-chip" id="chip-vuln" title="Keep only routes that pass through at least one service with a known vulnerability (e.g. SQL injection, path traversal). Vulnerable nodes: auth-service, order-service.">
-    <input type="checkbox" value="hasVulnerability" />
-    <span class="dot"></span> Has Vulnerability <span class="hint">?</span>
-  </label>
-
-  <span class="section-label" style="margin-left:8px">Highlight path</span>
+  <span class="section-label">Highlight path</span>
   <select id="from-node"><option value="">From node…</option></select>
   <select id="to-node"><option value="">To node…</option></select>
   <span id="path-msg"></span>
@@ -225,8 +206,8 @@
   <div id="sidebar">
     <div class="sidebar-tabs">
       <div class="sidebar-tab active" data-tab="routes">Routes</div>
-      <div class="sidebar-tab" data-tab="json">JSON</div>
-      <button id="clear-btn" title="Clear all filters and reset graph">✕ Clear</button>
+      <div class="sidebar-tab" data-tab="api">API</div>
+      <button id="clear-btn" title="Clear routes log">✕ Clear</button>
     </div>
 
     <div class="sidebar-panel active" id="panel-routes">
@@ -237,8 +218,9 @@
       <div id="routes-out"></div>
     </div>
 
-    <div class="sidebar-panel" id="panel-json">
-      <pre id="json-out">—</pre>
+    <div class="sidebar-panel" id="panel-api">
+      <div id="api-meta"><span class="api-label">No request yet</span></div>
+      <pre id="json-out" style="flex:1;padding:10px 14px;font-family:monospace;font-size:11px;line-height:1.6;color:#94a3b8;white-space:pre;overflow-y:auto">—</pre>
     </div>
 
     <div id="interesting">
@@ -308,7 +290,7 @@ const API = 'http://localhost:3000/api';
 const NODE_R = 20;
 const LABEL_FONT = '11px system-ui';
 
-let nodes = [], edgeList = [], highlightSet = new Set();
+let nodes = [], edgeList = [], highlightSet = new Set(), highlightEdgeSet = new Set();
 let nodeMetaMap = {}; // name → node object from last paths response
 let pan = { x: 0, y: 0 }, scale = 1;
 let dragging = false, dragStart, panStart, hoveredNode = null;
@@ -316,26 +298,19 @@ const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 
 // ── sidebar tabs ───────────────────────────────────────────────────
-document.querySelectorAll('.sidebar-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
-  });
-});
 
 document.getElementById('clear-btn').addEventListener('click', () => {
   document.getElementById('routes-out').innerHTML = '';
   document.getElementById('failure-box').style.display = 'none';
 });
 
-// ── filter chips ───────────────────────────────────────────────────
-document.querySelectorAll('.filter-chip').forEach(chip => {
-  chip.addEventListener('click', () => {
-    const cb = chip.querySelector('input');
-    cb.checked = !cb.checked;
-    chip.classList.toggle('active', cb.checked);
+// fix tab id reference
+document.querySelectorAll('.sidebar-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
   });
 });
 
@@ -349,63 +324,69 @@ function updateHighlight() {
   const from = document.getElementById('from-node').value;
   const to   = document.getElementById('to-node').value;
   const msg  = document.getElementById('path-msg');
-  highlightSet.clear();
+  highlightSet.clear(); highlightEdgeSet.clear();
   msg.textContent = '';
+
   if (from && to && from !== to) {
-    const path = bfs(from, to);
-    if (path.length === 0) {
+    const allPaths = findAllPathsBetween(from, to);
+    if (allPaths.length === 0) {
       msg.textContent = `⚠ No path: ${from.replace(/-service$/,'')} → ${to.replace(/-service$/,'')}`;
     } else {
-      path.forEach(n => highlightSet.add(n));
+      allPaths.forEach(path => {
+        path.forEach(n => highlightSet.add(n));
+        for (let i = 0; i < path.length - 1; i++)
+          highlightEdgeSet.add(path[i] + '__' + path[i+1]);
+      });
+      msg.textContent = allPaths.length > 1 ? `${allPaths.length} paths shown` : '';
     }
   }
   draw();
 }
 
-function bfs(fromName, toName) {
+function findAllPathsBetween(fromName, toName) {
   const adj = new Map();
   nodes.forEach(n => adj.set(n.name, []));
   edgeList.forEach(e => adj.get(e.from)?.push(e.to));
 
-  const prev = new Map();
-  const queue = [fromName];
-  prev.set(fromName, null);
-
-  while (queue.length) {
-    const cur = queue.shift();
-    if (cur === toName) break;
+  const results = [];
+  function dfs(cur, path, visited) {
+    if (cur === toName) { results.push([...path]); return; }
     for (const nb of (adj.get(cur) || [])) {
-      if (!prev.has(nb)) { prev.set(nb, cur); queue.push(nb); }
+      if (!visited.has(nb)) {
+        visited.add(nb); path.push(nb);
+        dfs(nb, path, visited);
+        path.pop(); visited.delete(nb);
+      }
     }
   }
-
-  if (!prev.has(toName)) return [];
-  const path = [];
-  let cur = toName;
-  while (cur !== null) { path.unshift(cur); cur = prev.get(cur); }
-  return path;
+  dfs(fromName, [fromName], new Set([fromName]));
+  return results;
 }
 
 // ── fetch & render ─────────────────────────────────────────────────
 async function fetchGraph() {
-  const selected = [...document.querySelectorAll('.filter-chip input:checked')].map(i => i.value);
-
-  const errBanner = document.getElementById('error-banner');
-  const emptyMsg  = document.getElementById('empty-msg');
+  const errBanner  = document.getElementById('error-banner');
+  const emptyMsg   = document.getElementById('empty-msg');
   const failureBox = document.getElementById('failure-box');
   errBanner.style.display = 'none';
   failureBox.style.display = 'none';
 
-  const qs = selected.length ? `?filters=${selected.join(',')}` : '';
+  const routeUrl = `${API}/routes`;
+  const pathUrl  = `${API}/paths`;
 
   try {
-    const [routeRes, pathRes] = await Promise.all([
-      fetch(`${API}/routes${qs}`),
-      fetch(`${API}/paths${qs}`),
-    ]);
+    const t0 = performance.now();
+    const [routeRes, pathRes] = await Promise.all([fetch(routeUrl), fetch(pathUrl)]);
+    const elapsed = (performance.now() - t0).toFixed(0);
     const data  = await routeRes.json();
     const pdata = await pathRes.json();
 
+    // API meta panel
+    document.getElementById('api-meta').innerHTML =
+      `<div><span class="api-label">REQ </span><span class="api-url">GET ${pathUrl}</span></div>` +
+      `<div><span class="api-label">RES </span><span class="api-ok">${pathRes.status} OK</span>` +
+      ` · <span class="api-time">${elapsed}ms</span>` +
+      ` · <span class="api-label">${pdata.count} routes</span></div>`;
     document.getElementById('json-out').innerHTML = syntaxHL(JSON.stringify(pdata, null, 2));
 
     if (!data.nodes) return;
@@ -467,7 +448,6 @@ document.querySelectorAll('.iroute').forEach(el => {
     if ([...fromSel.options].some(o => o.value === from)) fromSel.value = from;
     if ([...toSel.options].some(o => o.value === to))     toSel.value   = to;
     updateHighlight();
-    // Switch to Routes tab so user sees the highlighted path
     document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.remove('active'));
     document.querySelector('[data-tab="routes"]').classList.add('active');
@@ -654,7 +634,7 @@ function renderGraph(data) {
   const offsetY = PAD - minY * fitScale;
   nodes.forEach(n => { n.x = n.x * fitScale + offsetX; n.y = n.y * fitScale + offsetY; });
 
-  pan = { x: 0, y: 0 }; scale = 1; highlightSet.clear();
+  pan = { x: 0, y: 0 }; scale = 1; highlightSet.clear(); highlightEdgeSet.clear();
   updateHighlight();
   draw();
 }
@@ -680,7 +660,7 @@ function draw() {
   // edges
   edgeList.forEach(e => {
     const a = nodes[e.fi], b = nodes[e.ti];
-    const onPath = hasHL && highlightSet.has(a.name) && highlightSet.has(b.name);
+    const onPath = hasHL && highlightEdgeSet.has(a.name + '__' + b.name);
     drawArrow(a, b, onPath, hasHL && !onPath);
   });
 
