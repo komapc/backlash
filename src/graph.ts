@@ -14,7 +14,15 @@ function normalizeEdge(raw: RawEdge): string[] {
 
 export function loadGraph(filePath?: string): Graph {
   const path = filePath ?? join(__dirname, '..', 'data', 'graph.json');
-  const raw: RawGraph = JSON.parse(readFileSync(path, 'utf-8'));
+  let raw: RawGraph;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf-8'));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`Graph file not found: ${path}`);
+    }
+    throw new Error(`Failed to parse graph file: ${(err as Error).message}`);
+  }
 
   const nodes = new Map<string, GraphNode>();
   for (const node of raw.nodes) {

@@ -12,7 +12,9 @@ export function createRouter(graph: Graph): Router {
 
   router.get('/routes', (req: Request, res: Response) => {
     const raw = (req.query.filters as string | undefined) ?? '';
-    const filterNames = raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const filterNames = raw
+      ? [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean))]
+      : [];
 
     const invalid = validateFilters(filterNames);
     if (invalid.length > 0) {
