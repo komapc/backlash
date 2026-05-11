@@ -107,6 +107,12 @@
       transition: color .15s;
     }
     .sidebar-tab.active { color: #a78bfa; border-bottom-color: #a78bfa; }
+    #clear-btn {
+      background: none; border: none; color: #475569; font-size: 11px;
+      padding: 0 12px; cursor: pointer; white-space: nowrap;
+      transition: color .15s;
+    }
+    #clear-btn:hover { color: #f87171; }
     .sidebar-panel { display: none; flex: 1; overflow-y: auto; flex-direction: column; }
     .sidebar-panel.active { display: flex; }
     #json-out {
@@ -196,6 +202,7 @@
     <div class="sidebar-tabs">
       <div class="sidebar-tab active" data-tab="routes">Routes</div>
       <div class="sidebar-tab" data-tab="json">JSON</div>
+      <button id="clear-btn" title="Clear all filters and reset graph">✕ Clear</button>
     </div>
 
     <div class="sidebar-panel active" id="panel-routes">
@@ -242,6 +249,11 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
     tab.classList.add('active');
     document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
   });
+});
+
+document.getElementById('clear-btn').addEventListener('click', () => {
+  document.getElementById('routes-out').innerHTML = '';
+  document.getElementById('failure-box').style.display = 'none';
 });
 
 // ── filter chips ───────────────────────────────────────────────────
@@ -397,6 +409,8 @@ function renderRoutesList(pdata) {
 }
 
 // ── layout ─────────────────────────────────────────────────────────
+const SINK_KINDS = new Set(['rds', 'sqs']);
+
 function computeLayers(rawNodes, rawEdges) {
   const inDeg = new Map(rawNodes.map(n => [n.name, 0]));
   const adj   = new Map(rawNodes.map(n => [n.name, []]));
@@ -405,16 +419,27 @@ function computeLayers(rawNodes, rawEdges) {
     inDeg.set(e.to, (inDeg.get(e.to) || 0) + 1);
   });
 
-  // Longest-path layering via iterative relaxation
-  const layer = new Map(rawNodes.map(n => [n.name, 0]));
+  const sinkNames  = new Set(rawNodes.filter(n => SINK_KINDS.has(n.kind)).map(n => n.name));
+  const publicNames = new Set(rawNodes.filter(n => n.publicExposed).map(n => n.name));
+
+  // Pin public nodes to layer 0, compute longest-path for the rest (excluding sinks)
+  const layer = new Map(rawNodes.map(n => [n.name, publicNames.has(n.name) ? 0 : 1]));
   const order = topSort(rawNodes, rawEdges, adj, inDeg);
+
   for (const name of order) {
+    if (sinkNames.has(name)) continue;
     for (const nb of (adj.get(name) || [])) {
+      if (sinkNames.has(nb)) continue;
       if (layer.get(nb) <= layer.get(name)) {
         layer.set(nb, layer.get(name) + 1);
       }
     }
   }
+
+  // Pin sinks to max layer + 1
+  const maxMid = Math.max(0, ...[...layer.values()]);
+  sinkNames.forEach(name => layer.set(name, maxMid + 1));
+
   return layer;
 }
 
@@ -454,13 +479,13 @@ function renderGraph(data) {
 
   // Node radius: shrink so the busiest layer always fits
   const maxPerLayer = Math.max(...[...groups.values()].map(v => v.length));
-  const r = Math.max(8, Math.min(NODE_R, Math.floor((W - PAD * 2) / (maxPerLayer * 2.5))));
-  const minGap = r * 2 + 10;
+  const r = Math.max(8, Math.min(NODE_R, Math.floor((W - PAD * 2) / (maxPerLayer * 3.2))));
+  const minGap = r * 2 + 36;
 
   // Virtual canvas: wide enough so no layer ever overlaps
   const virtualW = Math.max(W, maxPerLayer * minGap + PAD * 2);
   const layerCount = maxLayer + 1;
-  const yStep = Math.min(100, (H - PAD * 2) / Math.max(layerCount - 1, 1));
+  const yStep = Math.min(130, (H - PAD * 2) / Math.max(layerCount - 1, 1));
 
   const posMap = new Map();
   groups.forEach((names, l) => {
@@ -475,7 +500,8 @@ function renderGraph(data) {
     ...n,
     x: posMap.get(n.name)?.x ?? virtualW / 2,
     y: posMap.get(n.name)?.y ?? H / 2,
-    vx: 0, vy: 0, r,
+    vx: 0, vy: 0,
+    r: (n.publicExposed || SINK_KINDS.has(n.kind)) ? Math.round(r * 1.45) : r,
   }));
 
   const nodeIdx = new Map(nodes.map((n, i) => [n.name, i]));
@@ -492,8 +518,8 @@ function renderGraph(data) {
         if ((layerMap.get(a.name) ?? 0) !== (layerMap.get(b.name) ?? 0)) return;
         const dx = b.x - a.x || 0.1;
         const dist = Math.abs(dx);
-        if (dist < minGap * 1.5) {
-          const force = (minGap * 1.5 - dist) * 0.3 * Math.sign(dx);
+        if (dist < minGap * 1.8) {
+          const force = (minGap * 1.8 - dist) * 0.3 * Math.sign(dx);
           a.vx -= force; b.vx += force;
         }
       });
@@ -550,32 +576,87 @@ function draw() {
   });
 
   // nodes
-  nodes.forEach(n => {
-    const color = nodeColor(n);
-    const dimmed = hasHL && !highlightSet.has(n.name);
-    const highlighted = hasHL && highlightSet.has(n.name);
-
-    ctx.globalAlpha = dimmed ? 0.25 : 1;
-    ctx.beginPath();
-    ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
-    ctx.fillStyle = color + '28';
-    ctx.fill();
-    ctx.strokeStyle = highlighted ? '#fff' : color;
-    ctx.lineWidth = (n === hoveredNode || highlighted) ? 2.5 : 1.5;
-    ctx.stroke();
-
-    // label
-    ctx.fillStyle = dimmed ? '#475569' : '#e2e8f0';
-    const fontSize = Math.max(9, Math.min(11, n.r - 2));
-    ctx.font = highlighted ? `bold ${fontSize}px system-ui` : `${fontSize}px system-ui`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    const label = n.name.replace(/-service$/, '');
-    ctx.fillText(label, n.x, n.y + n.r + 4);
-    ctx.globalAlpha = 1;
-  });
+  nodes.forEach(n => drawNode(n, hasHL));
 
   ctx.restore();
+}
+
+function hexPath(x, y, r) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 3) * i - Math.PI / 6;
+    i === 0 ? ctx.moveTo(x + r * Math.cos(a), y + r * Math.sin(a))
+            : ctx.lineTo(x + r * Math.cos(a), y + r * Math.sin(a));
+  }
+  ctx.closePath();
+}
+
+function drawNode(n, hasHL) {
+  const color     = nodeColor(n);
+  const isPublic  = !!n.publicExposed;
+  const isSink    = SINK_KINDS.has(n.kind);
+  const isVuln    = (n.vulnerabilities?.length ?? 0) > 0;
+  const dimmed    = hasHL && !highlightSet.has(n.name);
+  const highlighted = hasHL && highlightSet.has(n.name);
+  const hovered   = n === hoveredNode;
+  const lw        = (highlighted || hovered) ? 3 : 2;
+
+  ctx.globalAlpha = dimmed ? 0.2 : 1;
+
+  if (isPublic) {
+    // Hexagon + glow
+    ctx.shadowColor = color; ctx.shadowBlur = highlighted ? 22 : 14;
+    hexPath(n.x, n.y, n.r);
+    ctx.fillStyle = color + '35'; ctx.fill();
+    ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // "PUBLIC" badge inside
+    ctx.fillStyle = color;
+    ctx.font = `bold ${Math.max(7, n.r - 8)}px system-ui`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('PUBLIC', n.x, n.y);
+  } else if (isSink) {
+    // Rounded rect + glow
+    const w = n.r * 2.4, h = n.r * 1.7;
+    ctx.shadowColor = color; ctx.shadowBlur = highlighted ? 22 : 14;
+    ctx.beginPath();
+    ctx.roundRect(n.x - w / 2, n.y - h / 2, w, h, 7);
+    ctx.fillStyle = color + '35'; ctx.fill();
+    ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Kind label inside
+    ctx.fillStyle = color;
+    ctx.font = `bold ${Math.max(7, n.r - 8)}px system-ui`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(n.kind.toUpperCase(), n.x, n.y);
+  } else {
+    // Circle
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+    ctx.fillStyle = color + '28'; ctx.fill();
+    ctx.strokeStyle = highlighted ? '#fff' : color;
+    ctx.lineWidth = lw; ctx.stroke();
+
+    if (isVuln) {
+      // Dashed outer warning ring
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r + 5, 0, Math.PI * 2);
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = '#f87171'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // Name label below shape
+  const labelY = isSink ? n.y + n.r * 0.85 + 6 : n.y + n.r + 5;
+  const fontSize = Math.max(9, Math.min(11, n.r - 2));
+  ctx.fillStyle = dimmed ? '#334155' : isPublic ? color : isSink ? color : '#cbd5e1';
+  ctx.font = (highlighted || isPublic || isSink) ? `bold ${fontSize}px system-ui` : `${fontSize}px system-ui`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.fillText(n.name.replace(/-service$/, ''), n.x, labelY);
+  ctx.globalAlpha = 1;
 }
 
 function drawArrow(a, b, highlight, dimmed) {
