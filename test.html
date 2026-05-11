@@ -89,6 +89,7 @@
       font-size: 10px; color: #64748b; margin-left: 2px;
     }
     .filter-chip.active .hint { color: #818cf8; }
+    #path-msg { font-size: 11px; color: #ef4444; white-space: nowrap; }
 
     /* ── sidebar ── */
     #sidebar {
@@ -120,6 +121,28 @@
       font-family: monospace; font-size: 11px; line-height: 1.6;
       color: #94a3b8; white-space: pre;
     }
+    #json-out .j-key    { color: #93c5fd; }
+    #json-out .j-str    { color: #86efac; }
+    #json-out .j-num    { color: #fbbf24; }
+    #json-out .j-bool   { color: #f87171; }
+    #json-out .j-null   { color: #475569; }
+
+    #interesting {
+      border-top: 1px solid #2d3148; padding: 10px 14px; flex-shrink: 0;
+    }
+    #interesting h3 {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.8px; color: #475569; margin-bottom: 6px;
+    }
+    .iroute {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 8px; border-radius: 5px; margin-bottom: 3px;
+      background: #1e2235; cursor: pointer; font-size: 11px;
+      color: #64748b; transition: background .15s;
+    }
+    .iroute:hover { background: #252840; color: #e2e8f0; }
+    .iRoute-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .iRoute-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #routes-out {
       flex: 1; padding: 10px 14px; display: flex; flex-direction: column; gap: 2px;
     }
@@ -186,6 +209,7 @@
   <span class="section-label" style="margin-left:8px">Highlight path</span>
   <select id="from-node"><option value="">From node…</option></select>
   <select id="to-node"><option value="">To node…</option></select>
+  <span id="path-msg"></span>
 
   <button id="query-btn">Query</button>
   <span id="stats">—</span>
@@ -215,6 +239,56 @@
 
     <div class="sidebar-panel" id="panel-json">
       <pre id="json-out">—</pre>
+    </div>
+
+    <div id="interesting">
+      <h3>Interesting routes</h3>
+
+      <div style="font-size:10px;color:#475569;padding:2px 0 4px;text-transform:uppercase;letter-spacing:.5px">Single route</div>
+
+      <div class="iroute" data-from="auth-service" data-to="prod-postgresdb">
+        <div class="iRoute-dot" style="background:#f87171"></div>
+        <span class="iRoute-label">auth → RDS <span style="color:#f87171">(vuln→DB)</span></span>
+      </div>
+      <div class="iroute" data-from="order-service" data-to="prod-postgresdb">
+        <div class="iRoute-dot" style="background:#f87171"></div>
+        <span class="iRoute-label">order → RDS <span style="color:#f87171">(vuln→DB)</span></span>
+      </div>
+      <div class="iroute" data-from="inside-payment-service" data-to="prod-sqs">
+        <div class="iRoute-dot" style="background:#67e8f9"></div>
+        <span class="iRoute-label">payment → SQS</span>
+      </div>
+      <div class="iroute" data-from="frontend" data-to="contacts-service">
+        <div class="iRoute-dot" style="background:#bef264"></div>
+        <span class="iRoute-label">frontend → contacts <span style="color:#bef264">(public)</span></span>
+      </div>
+
+      <div style="font-size:10px;color:#475569;padding:6px 0 4px;text-transform:uppercase;letter-spacing:.5px">Multiple routes</div>
+
+      <div class="iroute" data-from="rebook-service" data-to="prod-sqs" data-count="2">
+        <div class="iRoute-dot" style="background:#67e8f9"></div>
+        <span class="iRoute-label">rebook → SQS <span style="color:#a78bfa">×2</span></span>
+      </div>
+      <div class="iroute" data-from="preserve-service" data-to="prod-postgresdb" data-count="6">
+        <div class="iRoute-dot" style="background:#818cf8"></div>
+        <span class="iRoute-label">preserve → RDS <span style="color:#a78bfa">×6</span></span>
+      </div>
+      <div class="iroute" data-from="preserve-other-service" data-to="prod-postgresdb" data-count="5">
+        <div class="iRoute-dot" style="background:#818cf8"></div>
+        <span class="iRoute-label">preserve-other → RDS <span style="color:#a78bfa">×5</span></span>
+      </div>
+      <div class="iroute" data-from="travel-plan-service" data-to="prod-postgresdb" data-count="5">
+        <div class="iRoute-dot" style="background:#818cf8"></div>
+        <span class="iRoute-label">travel-plan → RDS <span style="color:#a78bfa">×5</span></span>
+      </div>
+      <div class="iroute" data-from="rebook-service" data-to="prod-postgresdb" data-count="5">
+        <div class="iRoute-dot" style="background:#818cf8"></div>
+        <span class="iRoute-label">rebook → RDS <span style="color:#a78bfa">×5</span></span>
+      </div>
+      <div class="iroute" data-from="travel-plan-service" data-to="station-service" data-count="14">
+        <div class="iRoute-dot" style="background:#818cf8"></div>
+        <span class="iRoute-label">travel-plan → station <span style="color:#a78bfa">×14</span></span>
+      </div>
     </div>
 
     <div id="legend">
@@ -274,10 +348,16 @@ document.getElementById('to-node').addEventListener('change', updateHighlight);
 function updateHighlight() {
   const from = document.getElementById('from-node').value;
   const to   = document.getElementById('to-node').value;
+  const msg  = document.getElementById('path-msg');
   highlightSet.clear();
+  msg.textContent = '';
   if (from && to && from !== to) {
     const path = bfs(from, to);
-    path.forEach(n => highlightSet.add(n));
+    if (path.length === 0) {
+      msg.textContent = `⚠ No path: ${from.replace(/-service$/,'')} → ${to.replace(/-service$/,'')}`;
+    } else {
+      path.forEach(n => highlightSet.add(n));
+    }
   }
   draw();
 }
@@ -326,7 +406,7 @@ async function fetchGraph() {
     const data  = await routeRes.json();
     const pdata = await pathRes.json();
 
-    document.getElementById('json-out').textContent = JSON.stringify(data, null, 2);
+    document.getElementById('json-out').innerHTML = syntaxHL(JSON.stringify(pdata, null, 2));
 
     if (!data.nodes) return;
 
@@ -361,10 +441,39 @@ async function fetchGraph() {
     if (!isEmpty) renderGraph(data);
   } catch (e) {
     document.getElementById('json-out').textContent = 'Error: ' + e.message;
+
     document.getElementById('stats').textContent = 'Connection error';
     errBanner.style.display = 'block';
   }
 }
+
+// ── JSON syntax highlight ──────────────────────────────────────────
+function syntaxHL(json) {
+  return json.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, match => {
+      if (/^"/.test(match)) return /:$/.test(match) ? `<span class="j-key">${match}</span>` : `<span class="j-str">${match}</span>`;
+      if (/true|false/.test(match)) return `<span class="j-bool">${match}</span>`;
+      if (/null/.test(match)) return `<span class="j-null">${match}</span>`;
+      return `<span class="j-num">${match}</span>`;
+    });
+}
+
+// ── interesting routes ─────────────────────────────────────────────
+document.querySelectorAll('.iroute').forEach(el => {
+  el.addEventListener('click', () => {
+    const from = el.dataset.from, to = el.dataset.to;
+    const fromSel = document.getElementById('from-node');
+    const toSel   = document.getElementById('to-node');
+    if ([...fromSel.options].some(o => o.value === from)) fromSel.value = from;
+    if ([...toSel.options].some(o => o.value === to))     toSel.value   = to;
+    updateHighlight();
+    // Switch to Routes tab so user sees the highlighted path
+    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.remove('active'));
+    document.querySelector('[data-tab="routes"]').classList.add('active');
+    document.getElementById('panel-routes').classList.add('active');
+  });
+});
 
 // ── routes list ────────────────────────────────────────────────────
 function renderRoutesList(pdata) {
