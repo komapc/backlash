@@ -76,51 +76,27 @@
 
     #path-msg { font-size: 11px; color: #ef4444; white-space: nowrap; }
 
-    #api-meta {
-      padding: 8px 14px 6px; border-bottom: 1px solid #2d3148;
-      font-family: monospace; font-size: 11px; line-height: 1.8; flex-shrink: 0;
-    }
-    .api-url    { color: #a78bfa; }
-    .api-ok     { color: #86efac; }
-    .api-err    { color: #f87171; }
-    .api-time   { color: #fbbf24; }
-    .api-label  { color: #475569; }
-
     /* ── sidebar ── */
     #sidebar {
       width: 300px; background: #1a1d27;
       border-left: 1px solid #2d3148;
       display: flex; flex-direction: column; overflow: hidden;
     }
-    .sidebar-tabs {
-      display: flex; flex-shrink: 0;
-      border-bottom: 1px solid #2d3148;
+    .sidebar-header {
+      display: flex; flex-shrink: 0; align-items: center;
+      border-bottom: 1px solid #2d3148; padding: 0 14px;
     }
-    .sidebar-tab {
+    .sidebar-title {
       flex: 1; padding: 8px 0; font-size: 11px; font-weight: 600;
-      text-align: center; text-transform: uppercase; letter-spacing: 0.8px;
-      color: #475569; cursor: pointer; border-bottom: 2px solid transparent;
-      transition: color .15s;
+      text-transform: uppercase; letter-spacing: 0.8px; color: #a78bfa;
     }
-    .sidebar-tab.active { color: #a78bfa; border-bottom-color: #a78bfa; }
     #clear-btn {
       background: none; border: none; color: #475569; font-size: 11px;
       padding: 0 12px; cursor: pointer; white-space: nowrap;
       transition: color .15s;
     }
     #clear-btn:hover { color: #f87171; }
-    .sidebar-panel { display: none; flex: 1; overflow-y: auto; flex-direction: column; }
-    .sidebar-panel.active { display: flex; }
-    #json-out {
-      flex: 1; padding: 10px 14px;
-      font-family: monospace; font-size: 11px; line-height: 1.6;
-      color: #94a3b8; white-space: pre;
-    }
-    #json-out .j-key    { color: #93c5fd; }
-    #json-out .j-str    { color: #86efac; }
-    #json-out .j-num    { color: #fbbf24; }
-    #json-out .j-bool   { color: #f87171; }
-    #json-out .j-null   { color: #475569; }
+    #panel-routes { display: flex; flex: 1; overflow-y: auto; flex-direction: column; }
 
     #interesting {
       border-top: 1px solid #2d3148; padding: 10px 14px; flex-shrink: 0;
@@ -204,23 +180,17 @@
   </div>
 
   <div id="sidebar">
-    <div class="sidebar-tabs">
-      <div class="sidebar-tab active" data-tab="routes">Routes</div>
-      <div class="sidebar-tab" data-tab="api">API</div>
+    <div class="sidebar-header">
+      <div class="sidebar-title">Routes</div>
       <button id="clear-btn" title="Clear routes log">✕ Clear</button>
     </div>
 
-    <div class="sidebar-panel active" id="panel-routes">
+    <div id="panel-routes">
       <div id="failure-box">
         <div class="fb-title">⚠ No routes matched — filter breakdown</div>
         <div id="failure-rows"></div>
       </div>
       <div id="routes-out"></div>
-    </div>
-
-    <div class="sidebar-panel" id="panel-api">
-      <div id="api-meta"><span class="api-label">No request yet</span></div>
-      <pre id="json-out" style="flex:1;padding:10px 14px;font-family:monospace;font-size:11px;line-height:1.6;color:#94a3b8;white-space:pre;overflow-y:auto">—</pre>
     </div>
 
     <div id="interesting">
@@ -304,16 +274,6 @@ document.getElementById('clear-btn').addEventListener('click', () => {
   document.getElementById('failure-box').style.display = 'none';
 });
 
-// fix tab id reference
-document.querySelectorAll('.sidebar-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
-  });
-});
-
 document.getElementById('query-btn').addEventListener('click', fetchGraph);
 
 // ── from/to highlight ──────────────────────────────────────────────
@@ -371,23 +331,10 @@ async function fetchGraph() {
   errBanner.style.display = 'none';
   failureBox.style.display = 'none';
 
-  const routeUrl = `${API}/routes`;
-  const pathUrl  = `${API}/paths`;
-
   try {
-    const t0 = performance.now();
-    const [routeRes, pathRes] = await Promise.all([fetch(routeUrl), fetch(pathUrl)]);
-    const elapsed = (performance.now() - t0).toFixed(0);
+    const [routeRes, pathRes] = await Promise.all([fetch(`${API}/routes`), fetch(`${API}/paths`)]);
     const data  = await routeRes.json();
     const pdata = await pathRes.json();
-
-    // API meta panel
-    document.getElementById('api-meta').innerHTML =
-      `<div><span class="api-label">REQ </span><span class="api-url">GET ${pathUrl}</span></div>` +
-      `<div><span class="api-label">RES </span><span class="api-ok">${pathRes.status} OK</span>` +
-      ` · <span class="api-time">${elapsed}ms</span>` +
-      ` · <span class="api-label">${pdata.count} routes</span></div>`;
-    document.getElementById('json-out').innerHTML = syntaxHL(JSON.stringify(pdata, null, 2));
 
     if (!data.nodes) return;
 
@@ -421,22 +368,9 @@ async function fetchGraph() {
 
     if (!isEmpty) renderGraph(data);
   } catch (e) {
-    document.getElementById('json-out').textContent = 'Error: ' + e.message;
-
     document.getElementById('stats').textContent = 'Connection error';
     errBanner.style.display = 'block';
   }
-}
-
-// ── JSON syntax highlight ──────────────────────────────────────────
-function syntaxHL(json) {
-  return json.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, match => {
-      if (/^"/.test(match)) return /:$/.test(match) ? `<span class="j-key">${match}</span>` : `<span class="j-str">${match}</span>`;
-      if (/true|false/.test(match)) return `<span class="j-bool">${match}</span>`;
-      if (/null/.test(match)) return `<span class="j-null">${match}</span>`;
-      return `<span class="j-num">${match}</span>`;
-    });
 }
 
 // ── interesting routes ─────────────────────────────────────────────
@@ -448,10 +382,6 @@ document.querySelectorAll('.iroute').forEach(el => {
     if ([...fromSel.options].some(o => o.value === from)) fromSel.value = from;
     if ([...toSel.options].some(o => o.value === to))     toSel.value   = to;
     updateHighlight();
-    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.remove('active'));
-    document.querySelector('[data-tab="routes"]').classList.add('active');
-    document.getElementById('panel-routes').classList.add('active');
   });
 });
 
