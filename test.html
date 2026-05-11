@@ -92,20 +92,48 @@
 
     /* ── sidebar ── */
     #sidebar {
-      width: 260px; background: #1a1d27;
+      width: 300px; background: #1a1d27;
       border-left: 1px solid #2d3148;
       display: flex; flex-direction: column; overflow: hidden;
     }
-    #sidebar h2 {
-      padding: 10px 14px; font-size: 11px; font-weight: 600;
-      text-transform: uppercase; letter-spacing: 1px;
-      color: #64748b; border-bottom: 1px solid #2d3148; flex-shrink: 0;
+    .sidebar-tabs {
+      display: flex; flex-shrink: 0;
+      border-bottom: 1px solid #2d3148;
     }
+    .sidebar-tab {
+      flex: 1; padding: 8px 0; font-size: 11px; font-weight: 600;
+      text-align: center; text-transform: uppercase; letter-spacing: 0.8px;
+      color: #475569; cursor: pointer; border-bottom: 2px solid transparent;
+      transition: color .15s;
+    }
+    .sidebar-tab.active { color: #a78bfa; border-bottom-color: #a78bfa; }
+    .sidebar-panel { display: none; flex: 1; overflow-y: auto; flex-direction: column; }
+    .sidebar-panel.active { display: flex; }
     #json-out {
-      flex: 1; overflow-y: auto; padding: 10px 14px;
+      flex: 1; padding: 10px 14px;
       font-family: monospace; font-size: 11px; line-height: 1.6;
       color: #94a3b8; white-space: pre;
     }
+    #routes-out {
+      flex: 1; padding: 10px 14px; display: flex; flex-direction: column; gap: 2px;
+    }
+    .route-item {
+      font-size: 11px; line-height: 1.5; padding: 5px 8px;
+      border-radius: 5px; background: #1e2235; color: #94a3b8;
+      font-family: monospace; word-break: break-all;
+    }
+    .route-item .r-public { color: #bef264; }
+    .route-item .r-sink   { color: #67e8f9; }
+    .route-item .r-vuln   { color: #f87171; }
+    .route-item .r-arrow  { color: #475569; }
+    #failure-box {
+      margin: 10px 14px; padding: 10px 12px;
+      background: #1e1a2e; border: 1px solid #4c1d95;
+      border-radius: 6px; font-size: 11px; line-height: 1.8; display: none;
+    }
+    #failure-box .fb-title { color: #c4b5fd; font-weight: 600; margin-bottom: 6px; }
+    #failure-box .fb-row   { display: flex; justify-content: space-between; color: #7c3aed; }
+    #failure-box .fb-row span:last-child { color: #e2e8f0; }
     #legend {
       padding: 10px 14px; border-top: 1px solid #2d3148;
       display: flex; flex-direction: column; gap: 5px; flex-shrink: 0;
@@ -165,8 +193,23 @@
   </div>
 
   <div id="sidebar">
-    <h2>Response JSON</h2>
-    <pre id="json-out">—</pre>
+    <div class="sidebar-tabs">
+      <div class="sidebar-tab active" data-tab="routes">Routes</div>
+      <div class="sidebar-tab" data-tab="json">JSON</div>
+    </div>
+
+    <div class="sidebar-panel active" id="panel-routes">
+      <div id="failure-box">
+        <div class="fb-title">⚠ No routes matched — filter breakdown</div>
+        <div id="failure-rows"></div>
+      </div>
+      <div id="routes-out"></div>
+    </div>
+
+    <div class="sidebar-panel" id="panel-json">
+      <pre id="json-out">—</pre>
+    </div>
+
     <div id="legend">
       <div class="legend-row"><div class="legend-dot" style="background:#bef264"></div> Public entry point</div>
       <div class="legend-row"><div class="legend-dot" style="background:#67e8f9"></div> Sink (RDS / SQS)</div>
@@ -180,15 +223,26 @@
 <div id="tooltip"></div>
 
 <script>
-const API = 'http://localhost:3000/api/routes';
+const API = 'http://localhost:3000/api';
 const NODE_R = 20;
 const LABEL_FONT = '11px system-ui';
 
 let nodes = [], edgeList = [], highlightSet = new Set();
+let nodeMetaMap = {}; // name → node object from last paths response
 let pan = { x: 0, y: 0 }, scale = 1;
 let dragging = false, dragStart, panStart, hoveredNode = null;
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
+
+// ── sidebar tabs ───────────────────────────────────────────────────
+document.querySelectorAll('.sidebar-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+  });
+});
 
 // ── filter chips ───────────────────────────────────────────────────
 document.querySelectorAll('.filter-chip').forEach(chip => {
@@ -243,28 +297,43 @@ function bfs(fromName, toName) {
 // ── fetch & render ─────────────────────────────────────────────────
 async function fetchGraph() {
   const selected = [...document.querySelectorAll('.filter-chip input:checked')].map(i => i.value);
-  const url = selected.length ? `${API}?filters=${selected.join(',')}` : API;
 
-  const errBanner  = document.getElementById('error-banner');
-  const emptyMsg   = document.getElementById('empty-msg');
+  const errBanner = document.getElementById('error-banner');
+  const emptyMsg  = document.getElementById('empty-msg');
+  const failureBox = document.getElementById('failure-box');
   errBanner.style.display = 'none';
+  failureBox.style.display = 'none';
+
+  const qs = selected.length ? `?filters=${selected.join(',')}` : '';
 
   try {
-    const res = await fetch(url);
-    const data = await res.json();
+    const [routeRes, pathRes] = await Promise.all([
+      fetch(`${API}/routes${qs}`),
+      fetch(`${API}/paths${qs}`),
+    ]);
+    const data  = await routeRes.json();
+    const pdata = await pathRes.json();
+
     document.getElementById('json-out').textContent = JSON.stringify(data, null, 2);
 
     if (!data.nodes) return;
 
-    const isEmpty = data.nodes.length === 0;
+    // Build metadata map for route colouring
+    nodeMetaMap = {};
+    data.nodes.forEach(n => nodeMetaMap[n.name] = n);
+
+    const isEmpty = pdata.count === 0;
     document.getElementById('stats').textContent = isEmpty
-      ? 'No matching routes'
-      : `${data.nodes.length} nodes · ${data.edges.length} edges`;
+      ? `0 / ${pdata.totalUnfiltered} routes matched`
+      : `${pdata.count} routes · ${data.nodes.length} nodes`;
 
     emptyMsg.style.display = isEmpty ? 'block' : 'none';
     if (isEmpty) {
-      emptyMsg.innerHTML = '🔍 No routes match the selected filters.<br><span style="font-size:12px">Try removing a filter or changing the combination.</span>';
+      emptyMsg.innerHTML = '🔍 No routes match the selected filters.<br><span style="font-size:12px">See the Routes panel for details.</span>';
     }
+
+    // Routes panel
+    renderRoutesList(pdata);
 
     // Populate From/To dropdowns
     const fromSel = document.getElementById('from-node');
@@ -283,6 +352,48 @@ async function fetchGraph() {
     document.getElementById('stats').textContent = 'Connection error';
     errBanner.style.display = 'block';
   }
+}
+
+// ── routes list ────────────────────────────────────────────────────
+function renderRoutesList(pdata) {
+  const container = document.getElementById('routes-out');
+  const failureBox = document.getElementById('failure-box');
+  container.innerHTML = '';
+
+  if (pdata.count === 0 && pdata.appliedFilters.length > 0) {
+    // Show breakdown explaining the failure
+    failureBox.style.display = 'block';
+    const rows = document.getElementById('failure-rows');
+    rows.innerHTML = '';
+    const total = pdata.totalUnfiltered;
+    rows.innerHTML += `<div class="fb-row"><span>All routes (no filter)</span><span>${total}</span></div>`;
+    for (const [name, count] of Object.entries(pdata.breakdown)) {
+      const active = pdata.appliedFilters.includes(name);
+      rows.innerHTML += `<div class="fb-row" style="${active ? 'color:#c4b5fd' : 'opacity:0.5'}">
+        <span>${active ? '▶ ' : ''}${name}</span><span>${count}</span>
+      </div>`;
+    }
+    rows.innerHTML += `<div class="fb-row" style="border-top:1px solid #4c1d95;margin-top:4px;padding-top:4px;color:#ef4444">
+      <span>Combined result</span><span>0</span>
+    </div>`;
+    return;
+  }
+
+  failureBox.style.display = 'none';
+
+  const sinkKinds = new Set(['rds', 'sqs']);
+
+  pdata.paths.forEach((path, idx) => {
+    const parts = path.map(name => {
+      const meta = nodeMetaMap[name];
+      let cls = '';
+      if (meta?.publicExposed) cls = 'r-public';
+      else if (sinkKinds.has(meta?.kind)) cls = 'r-sink';
+      else if (meta?.vulnerabilities?.length) cls = 'r-vuln';
+      return `<span class="${cls}">${name}</span>`;
+    });
+    container.innerHTML += `<div class="route-item">${idx + 1}. ${parts.join('<span class="r-arrow"> → </span>')}</div>`;
+  });
 }
 
 // ── layout ─────────────────────────────────────────────────────────

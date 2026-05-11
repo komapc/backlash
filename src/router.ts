@@ -11,27 +11,46 @@ export function createRouter(graph: Graph): Router {
   const allPaths = findAllPaths(graph);
 
   router.get('/routes', (req: Request, res: Response) => {
-    const raw = (req.query.filters as string | undefined) ?? '';
-    const filterNames = raw
-      ? [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean))]
-      : [];
+    const { filterNames, error } = parseFilters(req);
+    if (error) { res.status(400).json(error); return; }
+    const matchedPaths = applyFilters(allPaths, filterNames);
+    res.json(buildSubgraph(matchedPaths, graph));
+  });
 
-    const invalid = validateFilters(filterNames);
-    if (invalid.length > 0) {
-      res.status(400).json({
-        error: `Unknown filter(s): ${invalid.join(', ')}`,
-        validFilters: Object.keys(FILTERS),
-      });
-      return;
-    }
+  router.get('/paths', (req: Request, res: Response) => {
+    const { filterNames, error } = parseFilters(req);
+    if (error) { res.status(400).json(error); return; }
 
     const matchedPaths = applyFilters(allPaths, filterNames);
-    const subgraph = buildSubgraph(matchedPaths, graph);
 
-    res.json(subgraph);
+    // Per-filter breakdown: how many paths each filter alone would return
+    const breakdown: Record<string, number> = {};
+    for (const name of Object.keys(FILTERS)) {
+      breakdown[name] = applyFilters(allPaths, [name]).length;
+    }
+
+    res.json({
+      count: matchedPaths.length,
+      totalUnfiltered: allPaths.length,
+      appliedFilters: filterNames,
+      breakdown,
+      paths: matchedPaths.map(p => p.map(n => n.name)),
+    });
   });
 
   return router;
+}
+
+function parseFilters(req: Request): { filterNames: string[]; error?: object } {
+  const raw = (req.query.filters as string | undefined) ?? '';
+  const filterNames = raw
+    ? [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean))]
+    : [];
+  const invalid = validateFilters(filterNames);
+  if (invalid.length > 0) {
+    return { filterNames: [], error: { error: `Unknown filter(s): ${invalid.join(', ')}`, validFilters: Object.keys(FILTERS) } };
+  }
+  return { filterNames };
 }
 
 function buildSubgraph(paths: GraphNode[][], graph: Graph): SubGraph {
