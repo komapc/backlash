@@ -28,6 +28,10 @@ No database. No persistence. The graph is loaded once at startup and kept in mem
 
 **Response = merged subgraph.** All nodes and edges that appear in any matching path are deduplicated and returned as `{ nodes, edges }`. This is the shape most graph rendering libraries (e.g. Cytoscape, React Flow) expect directly.
 
+### Assumptions
+
+**Node names are unique.** Each node is identified solely by its `name` field. The graph is stored as a `Map<string, GraphNode>` keyed by name — a duplicate name would silently overwrite the earlier entry. The input data upholds this (microservice names are unique within a deployment), but the API does not validate it explicitly.
+
 ### Data Quirks Handled
 
 - `consign-service` has `"to"` as a string instead of an array — normalized on load.
@@ -64,17 +68,11 @@ Returns a subgraph of nodes and edges matching all requested filters.
 ```json
 {
   "nodes": [
-    {
-      "name": "auth-service",
-      "kind": "service",
-      "language": "java",
-      "path": "train-ticket/ts-auth-service",
-      "publicExposed": false,
-      "vulnerabilities": [...]
-    }
+    { "name": "auth-service", "hasVulnerability": true },
+    { "name": "prod-postgresdb", "hasVulnerability": false }
   ],
   "edges": [
-    { "from": "user-service", "to": "auth-service" }
+    { "from": "auth-service", "to": "prod-postgresdb" }
   ]
 }
 ```

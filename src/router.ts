@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { Graph } from './graph';
 import { findAllPaths } from './traversal';
 import { applyFilters, validateFilters, FILTERS } from './filters';
-import { GraphNode, SubGraph } from './types';
+import { GraphNode, SubGraph, SubGraphNode } from './types';
 
 export function createRouter(graph: Graph): Router {
   const router = Router();
@@ -66,7 +66,10 @@ function buildSubgraph(paths: GraphNode[][], graph: Graph): SubGraph {
     }
   }
 
-  const nodes = Array.from(nodeSet).map(name => graph.nodes.get(name)!);
+  const nodes: SubGraphNode[] = Array.from(nodeSet).map(name => {
+    const n = graph.nodes.get(name)!;
+    return { name: n.name, hasVulnerability: (n.vulnerabilities?.length ?? 0) > 0 };
+  });
   const edges = Array.from(edgeSet).map(key => {
     const [from, to] = key.split('__');
     return { from, to };

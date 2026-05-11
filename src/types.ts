@@ -25,8 +25,13 @@ export interface RawGraph {
   edges: RawEdge[];
 }
 
+export interface SubGraphNode {
+  name: string;
+  hasVulnerability: boolean;
+}
+
 export interface SubGraph {
-  nodes: GraphNode[];
+  nodes: SubGraphNode[];
   edges: Array<{ from: string; to: string }>;
 }
 
