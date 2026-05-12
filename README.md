@@ -11,7 +11,7 @@ The problem is a graph traversal problem. The JSON file describes a directed gra
 ```
 JSON file
   └─ loadGraph()        normalize edges, build adjacency map, insert ghost nodes
-       └─ findAllPaths()    DFS from every node → collect all simple maximal paths
+       └─ findAllPaths()    assert DAG → topological sort → DP collect all maximal paths
             └─ applyFilters()   keep paths matching all requested filters (AND logic)
                  └─ buildSubgraph()  deduplicate nodes + edges → return renderable graph
 ```
@@ -20,7 +20,7 @@ No database. No persistence. The graph is loaded once at startup and kept in mem
 
 ### Key Design Decisions
 
-**Route = maximal simple path.** A path is recorded only when it can no longer be extended (dead end or all neighbors already on the current path). This avoids redundant sub-paths and keeps the traversal output clean.
+**Route = maximal simple path.** A path is recorded only when it can no longer be extended (dead end). This avoids redundant sub-paths and keeps the traversal output clean. The graph is a confirmed DAG, so paths are computed via topological sort + DP — each shared suffix is computed once and reused by all upstream nodes.
 
 **Filters are AND-combined.** A path must satisfy *all* requested filters. This matches the security-analysis use case: "find me routes that start public AND reach a database AND pass through a vulnerable service."
 
@@ -146,7 +146,7 @@ No other changes needed.
 src/
   types.ts       — TypeScript interfaces
   graph.ts       — JSON loader, edge normalizer, adjacency map builder
-  traversal.ts   — DFS path finder
+  traversal.ts   — DAG cycle check, topological sort, DP path finder
   filters.ts     — filter registry and built-in filters
   router.ts      — Express route and subgraph builder
   server.ts      — entry point
