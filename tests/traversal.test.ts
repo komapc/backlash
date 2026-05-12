@@ -33,13 +33,9 @@ describe('findAllPaths', () => {
     expect(pathNames).toContain('A->C');
   });
 
-  it('does not revisit nodes (no cycles in output)', () => {
+  it('throws when the graph contains a cycle', () => {
     const graph = makeGraph(['A', 'B'], [['A', 'B'], ['B', 'A']]);
-    const paths = findAllPaths(graph);
-    for (const path of paths) {
-      const names = path.map(n => n.name);
-      expect(new Set(names).size).toBe(names.length);
-    }
+    expect(() => findAllPaths(graph)).toThrow('cycle');
   });
 
   it('only returns paths of length > 1', () => {
