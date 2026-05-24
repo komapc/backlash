@@ -52,6 +52,13 @@ function topologicalSort(graph: Graph): string[] {
   return order;
 }
 
+// TODO(perf): for large/dense graphs, replace pre-computation with on-request DFS + filter-aware
+// pruning. Space drops from O(P·L) to O(V); each request pays O(V+E) traversal cost instead.
+
+// TODO(perf): for filters that only care about start/end nodes (startsPublic, endsAtSink), replace
+// path enumeration with reachability sets: forward BFS from public nodes + backward BFS from sinks
+// on the reversed graph; intersect the two sets. O(V+E) time and space, no paths stored at all.
+
 // Find all maximal simple paths in the graph using topological DP.
 //
 // Key idea: process nodes in reverse topological order (sinks first).
