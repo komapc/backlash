@@ -3,11 +3,13 @@ import { join } from 'path';
 import { GraphNode, RawGraph, RawEdge } from './types';
 
 export interface Graph {
-  nodes: Map<string, GraphNode>;
-  adjacency: Map<string, string[]>;
-  edges: Array<{ from: string; to: string }>;
+  nodes: Map<string, GraphNode>;     // keyed by name — assumed unique (see README)
+  adjacency: Map<string, string[]>;  // name → list of neighbor names, used by DFS
+  edges: Array<{ from: string; to: string }>; // flat list kept for subgraph building
 }
 
+// The JSON is inconsistent: most edges have `to: string[]`, but consign-service has `to: string`.
+// Always return an array so the rest of the code never has to branch.
 function normalizeEdge(raw: RawEdge): string[] {
   return Array.isArray(raw.to) ? raw.to : [raw.to];
 }
@@ -24,6 +26,7 @@ export function loadGraph(filePath?: string): Graph {
     throw new Error(`Failed to parse graph file: ${(err as Error).message}`);
   }
 
+  // Index all declared nodes by name for O(1) lookup
   const nodes = new Map<string, GraphNode>();
   for (const node of raw.nodes) {
     nodes.set(node.name, node);
@@ -36,7 +39,8 @@ export function loadGraph(filePath?: string): Graph {
     const targets = normalizeEdge(rawEdge);
 
     for (const target of targets) {
-      // Insert ghost node for any target not defined in nodes
+      // Ghost node: assurance-service is referenced in edges but missing from the nodes list.
+      // Insert a placeholder rather than skipping the edge, so no connectivity is silently lost.
       if (!nodes.has(target)) {
         nodes.set(target, { name: target, kind: 'unknown' });
       }
@@ -48,13 +52,13 @@ export function loadGraph(filePath?: string): Graph {
       adjacency.set(rawEdge.from, existing);
     }
 
-    // Ensure source node also exists in adjacency map (even if no outgoing edges added yet)
+    // Source node may have no outgoing edges yet — ensure it has an entry so DFS can start from it
     if (!adjacency.has(rawEdge.from)) {
       adjacency.set(rawEdge.from, []);
     }
   }
 
-  // Ensure every node has an entry in the adjacency map
+  // Nodes defined in the JSON but not appearing in any edge also need an adjacency entry
   for (const name of nodes.keys()) {
     if (!adjacency.has(name)) {
       adjacency.set(name, []);
