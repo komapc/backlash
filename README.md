@@ -4,29 +4,55 @@ A RESTful API that loads a microservice dependency graph from a JSON file and pr
 
 ## Solution Overview
 
-The problem is a graph traversal problem. The JSON file describes a directed graph of microservices (nodes) and their call relationships (edges). The API exposes endpoints to query **routes** through that graph — where a route is any simple path (no repeated nodes) between two services — filtered by node properties.
+The JSON file describes a directed graph of microservices (nodes) and their call relationships (edges). The API exposes endpoints to query **routes** through that graph — where a route is any maximal simple path from a source service to a sink — optionally filtered by node properties.
 
-### Architecture
+No database. No persistence. The graph is loaded once at startup, all paths are pre-computed, and every request is a plain array scan over that pre-computed list.
+
+### How it works
+
+#### Phase 1 — Load (once at startup)
+
+Parse the JSON into two in-memory structures:
+
+- `Map<name, GraphNode>` — O(1) node lookup by name
+- `Map<name, string[]>` — adjacency list of outgoing neighbors per node
+
+#### Phase 2 — Pre-compute all paths (once at startup)
+
+**Step 1: Assert DAG.**  
+DFS with three-color marking (white / gray / black) confirms no cycles exist. A gray neighbor during DFS means a back-edge — the traversal throws immediately. This guarantee is required for the next step.
+
+**Step 2: Topological sort (Kahn's algorithm).**  
+BFS over node in-degrees produces an ordering where every node appears before all its downstream neighbors:
 
 ```
-JSON file
-  └─ loadGraph()        normalize edges, build adjacency map, insert ghost nodes
-       └─ findAllPaths()    assert DAG → topological sort → DP collect all maximal paths
-            └─ applyFilters()   keep paths matching all requested filters (AND logic)
-                 └─ buildSubgraph()  deduplicate nodes + edges → return renderable graph
+frontend → gateway → auth-service → ... → postgresdb
 ```
 
-No database. No persistence. The graph is loaded once at startup and kept in memory.
+**Step 3: DP path collection.**  
+Iterate the topological order **in reverse** — sinks first, sources last. At each node:
+
+- **Sink** (no outgoing edges): `suffixes[node] = [[node]]` — one path, just itself.
+- **Non-sink**: `suffixes[node] = [node] prepended to every path in suffixes[neighbor]`, for each neighbor.
+
+Because we go sinks-first, every neighbor's paths are already computed when we need them. No recursion, no re-traversal — each shared suffix is computed exactly once and reused by all upstream nodes.
+
+The result is `allPaths: GraphNode[][]` — every maximal path in the graph, stored flat in memory.
+
+#### Phase 3 — Per request
+
+1. Parse and validate filter names from the query string.
+2. `allPaths.filter(path => every requested filter passes)` — plain array scan, O(P) where P = number of paths.
+3. Deduplicate all nodes and edges that appear in matching paths into `{ nodes[], edges[] }`.
+4. Return JSON — the shape is directly renderable by graph libraries (Cytoscape, React Flow, etc.).
 
 ### Key Design Decisions
 
-**Route = maximal simple path.** A path is recorded only when it can no longer be extended (dead end). This avoids redundant sub-paths and keeps the traversal output clean. The graph is a confirmed DAG, so paths are computed via topological sort + DP — each shared suffix is computed once and reused by all upstream nodes.
-
 **Filters are AND-combined.** A path must satisfy *all* requested filters. This matches the security-analysis use case: "find me routes that start public AND reach a database AND pass through a vulnerable service."
 
-**Filter registry pattern.** Each filter is a single `(path: GraphNode[]) => boolean` function stored in a plain `Record`. Adding a new filter requires only one line — no routing changes, no new classes, no configuration.
+**Filter registry pattern.** Each filter is a single `(path: GraphNode[]) => boolean` function stored in a plain `Record`. Adding a new filter requires one line — no routing changes, no new classes, no configuration.
 
-**Response = merged subgraph.** All nodes and edges that appear in any matching path are deduplicated and returned as `{ nodes, edges }`. This is the shape most graph rendering libraries (e.g. Cytoscape, React Flow) expect directly.
+**Response = merged subgraph.** All nodes and edges that appear in any matching path are deduplicated and returned as `{ nodes, edges }`. This is the shape most graph rendering libraries expect directly.
 
 ### Assumptions
 
